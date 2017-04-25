@@ -1,0 +1,5 @@
+*.png
+*.mid
+*.wav
+*.mp4
+.ipynb_checkpoints/
