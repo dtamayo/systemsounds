@@ -10,10 +10,10 @@ If you are unfamiliar with virtual environments, you can follow these steps to i
 
 Download anaconda, python 3 version: https://www.continuum.io/downloads
 Open terminal and navigate to your home directory::
-    blah blah
+    $ Cd ~
 
 Testing::
-    Export PATH=path/to/anaconda/bin$PATH
+    $ export PATH=path/to/anaconda/bin$PATH
 
 Back in terminal::
 
