@@ -12,6 +12,7 @@ Download anaconda, python 3 version: https://www.continuum.io/downloads
 Open terminal and navigate to your home directory::
     $ Cd ~
 
+Testing::
     Export PATH=path/to/anaconda/bin$PATH
 
 Back in terminal::
