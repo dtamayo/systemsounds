@@ -10,10 +10,18 @@ If you are unfamiliar with virtual environments, you can follow these steps to i
 
 Download anaconda, python 3 version: https://www.continuum.io/downloads
 Open terminal and navigate to your home directory:
+
+.. code::
     Cd ~
+
 Add the following line to your .bashrc file (if it doesn't exist, make one with that name)
+
+.. code::
     Export PATH=path/to/anaconda/bin$PATH
+
 Back in terminal:
+
+.. code::
     source .bashrc
 
 conda create -n venv pip
