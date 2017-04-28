@@ -12,7 +12,9 @@ Download anaconda, python 3 version: https://www.continuum.io/downloads
 Open terminal and navigate to your home directory::
     \$ Cd \~
 
-Add the following line to your `.bashrc` file (if it doesn't exist, make one with that name)::
+Add the following line to your `.bashrc` file (if it doesn't exist, make one with that name)
+
+::
     export PATH=path/to/anaconda/bin$PATH
 
 Back in terminal::
