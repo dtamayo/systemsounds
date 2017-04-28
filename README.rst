@@ -15,7 +15,7 @@ Open terminal and navigate to your home directory::
 
 Add the following line to your `.bashrc` file (if it doesn't exist, make one with that name)::
 
-    `export PATH=path/to/anaconda/bin$PATH`,
+    `export PATH=path/to/anaconda/bin$PATH`
     
 where you should replace `/path/to/anaconda` to the path where you installed anaconda (don't forget to add bin afterward).
 
