@@ -93,7 +93,7 @@ class System():
         set_time_per_beat(self.sim, self.time_per_beat)
         self.change_tempo(bpm)
         if not dt:
-            self.dt = self.sim.dt
+            self.dt = self.sim.particles[1].P/5.
         else:
             self.dt = dt
         self.fig_params = []
