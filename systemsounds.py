@@ -11,7 +11,7 @@ warnings.filterwarnings("ignore")
 
 def set_time_per_beat(sim, time_per_beat): # makes sim.t run in units of the outer planet orbit = one beat
     ps = sim.particles
-    sim.G = time_per_beat**2
+    sim.G *= time_per_beat**2
     sim.dt /= time_per_beat
     for p in ps:
         p.vx *= time_per_beat
