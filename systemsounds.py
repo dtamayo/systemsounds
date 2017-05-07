@@ -35,7 +35,7 @@ def write_png(params):
     ax = fig.axes[0]
     ax.axis('off')
         
-    for i in showtransits:
+    for i in showplanets:
         p = ps[i]
         ax.scatter(p.x, p.y, s=refsize, color=color[i], marker='o', zorder=4)
     for i in showtransits:
@@ -61,7 +61,7 @@ def write_png(params):
     plt.close(fig)  
 
 class System():
-    def __init__(self, filename, bpm, time_per_beat=None, dt=None, outer_midi_note=48, fps=30):
+    def __init__(self, filename, bpm, time_per_beat=None, dt=None, dt_epsilon=1.e-5, outer_midi_note=48, fps=30, exact_midi_times=True):
         try:
             call("rm -f ./tmp/*", shell=True)
         except:
@@ -69,15 +69,11 @@ class System():
         self.midi = MIDIFile(adjust_origin=True) # One track, defaults to format 1 (tempo track automatically created)
         self.filename = filename
         self.sim = rebound.Simulation.from_file(filename)
+        self.exact_midi_times = exact_midi_times
+        if self.exact_midi_times:
+            self.sim.integrator = "ias15"
         self.sim.t = 0
-        if time_per_beat:
-            self.time_per_beat = time_per_beat
-        else:
-            self.time_per_beat = self.sim.particles[-1].P
-        if not dt:
-            self.sim.dt = self.sim.particles[1].P/100. # use small timestep to get transits right. This is not the bottleneck
-        else:
-            self.sim.dt = dt
+        self.dt_epsilon = dt_epsilon
         
         self.bpm = bpm
         self.fps = fps
@@ -90,8 +86,16 @@ class System():
         self.conjunction_notes = [12 for i in range(self.sim.N)] # C1
         self.conjunction_velocities = [100 for i in range(self.sim.N)]
         
+        if time_per_beat:
+            self.time_per_beat = time_per_beat
+        else:
+            self.time_per_beat = self.sim.particles[-1].P
         set_time_per_beat(self.sim, self.time_per_beat)
         self.change_tempo(bpm)
+        if not dt:
+            self.dt = self.sim.dt
+        else:
+            self.dt = dt
         self.fig_params = []
         self.conjunctions = []
     def calc_midi_notes(self, outer_midi_note):
@@ -112,6 +116,33 @@ class System():
             return ()
         else:
             return tuple(arg)
+    def copysim(self):
+        sim = rebound.Simulation()
+        sim.G = self.sim.G
+        sim.t = self.sim.t
+        for p in self.sim.particles:
+            sim.add(p)
+        return sim
+
+    def find_exact_crossing_time(self, get_val, prevt): # do bisection to find exact crossing time
+        sim2 = self.copysim()
+        oldt = self.sim.t # need to go back from overshot t to previous value
+        newt = prevt 
+        sim2.dt *= -1
+        oldval = get_val(sim2) #ps[j].y
+        while (abs(newt - oldt)> self.dt_epsilon):
+            midt = (newt + oldt)/2.
+            #print(oldt, newt, midt, get_val(sim2))
+            sim2.integrate(midt)
+            if oldval*get_val(sim2) < 0.: # switched sign
+                newt = oldt # go back to prev value
+                sim2.dt *= -0.3
+            else: # keep integrating toward newt
+                sim2.dt *= 0.3
+            oldt = midt # next iteration starts at midt
+            oldval = get_val(sim2)
+        return sim2.t
+
     def integrate(self, tmax, color=True, duration=1, track=0, playtransits=True, playconjunctions=False, showplanets=True, showtransits=True, showconjunctions=True, planetentrance=False):
         playtransits = self.make_tuple(playtransits)
         playconjunctions = self.make_tuple(playconjunctions)
@@ -125,13 +156,19 @@ class System():
         yprev = np.zeros(N)
         sinthetaprev = np.zeros(N)
         while self.sim.t < tmax:
-            self.sim.step()
-            self.time_elapsed += self.sim.dt/self.bpm*60.
+            prevt = self.sim.t
+            self.sim.integrate(self.sim.t+self.dt)
+            #print(self.sim.t, self.sim.particles[1].x, self.sim.particles[1].y)
+            self.time_elapsed += self.dt/self.bpm*60.
             for j in playtransits:
-                if yprev[j] < 0 and ps[j].y > 0:
-                    #print(self.sim.t, j,playtransits[0])
-                    #print(ps[j].index)
-                    self.midi.addNote(track, ps[j].index, self.notes[j], self.sim.t, duration, self.velocities[j])
+                if yprev[j] < 0 and ps[j].y > 0: # Crossed x axis
+                    #if j==1:
+                    #    print(self.sim.t)
+                    if self.exact_midi_times:
+                        t = self.find_exact_crossing_time(lambda sim: sim.particles[j].y, prevt)
+                    else:
+                        t = self.sim.t
+                    self.midi.addNote(track, ps[j].index, self.notes[j], t, duration, self.velocities[j])
                     if j==playtransits[0]:  
                         new_entrance=True
                 yprev[j] = ps[j].y
@@ -140,9 +177,13 @@ class System():
                 if j+1 in playconjunctions:
                     sintheta = np.sin(ps[j+1].theta-ps[j].theta)
                     if sinthetaprev[j] > 0 and sintheta < 0:
-                        #print('conjunction', self.sim.t, j)
+                        if self.exact_midi_times:
+                            t = self.find_exact_crossing_time(lambda sim: np.sin(sim.particles[j+1].theta-sim.particles[j].theta), prevt)
+                        else:
+                            t = self.sim.t
+                        #print('conjunction', t, j)
                         self.conjunctions.append((self.sim.t, j, ps[j].x, ps[j].y))
-                        self.midi.addNote(track, N, self.conjunction_notes[j], self.sim.t, duration, self.conjunction_velocities[j]) # add to track above all planets
+                        self.midi.addNote(track, N, self.conjunction_notes[j], t, duration, self.conjunction_velocities[j]) # add to track above all planets
                     sinthetaprev[j] = sintheta
             if self.time_elapsed/self.time_per_fig > self.fig_ctr + 1:
                 if len(playtransits)>1 and planetentrance==True and new_entrance==False:
