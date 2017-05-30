@@ -1,5 +1,6 @@
 from midiutil import MIDIFile
 import rebound
+from rebound import hash as rebhash
 import numpy as np
 import matplotlib.pyplot as plt
 from subprocess import call
@@ -9,21 +10,40 @@ from scipy.misc import imread
 import warnings
 warnings.filterwarnings("ignore")
 
-def set_time_per_beat(sim, time_per_beat): # makes sim.t run in units of the outer planet orbit = one beat
+"""
+integrate:
+    store events
+    recordtransits
+    transits = []
+    frames = []
+    Event:
+        init(t)
+    Transit
+        init(particle)
+    Conjunction
+        init(pair)
+    self.midi.addNote(track, ps[j].index, self.notes[j], t, duration, self.velocities[j])
+    self.conjunctions.append((self.sim.t, j, ps[j].x, ps[j].y))
+    self.midi.addNote(track, N, self.conjunction_notes[j], t, duration, self.conjunction_velocities[j]) # add to track above all planets
+    hash?
+"""
+
+
+def rescale_time(sim, timescale): # Rescale time by timescale, i.e. timescale time units will now correspond to 1 time units
     ps = sim.particles
-    sim.G *= time_per_beat**2
-    sim.dt /= time_per_beat
+    sim.G *= timescale**2
+    sim.dt /= timescale
     for p in ps:
-        p.vx *= time_per_beat
-        p.vy *= time_per_beat
-        p.vz *= time_per_beat
+        p.vx *= timescale
+        p.vy *= timescale
+        p.vz *= timescale
 
 def write_png(params):
     fig_ctr, time, filename, time_per_beat, color, showplanets, showtransits, showconjunctions, conjunctions, background, transparent = params
     coloriterator = [color[i] for i in showplanets]
     sim = rebound.Simulation.from_file(filename)
     sim.t=0
-    set_time_per_beat(sim, time_per_beat)
+    rescale_time(sim, time_per_beat)
     sim.integrate(time)
     ps = sim.particles
     
@@ -60,24 +80,46 @@ def write_png(params):
     fig.savefig('tmp/pngs/{0:0=5d}.png'.format(fig_ctr), transparent=transparent,dpi=300)
     plt.close(fig)  
 
+class Event():
+    def __init__(self, filename):
+        self.filename = filename
+
+class Frame(Event):
+    def __init__(self, filename, fig_ctr):
+        Event.__init__(self, filename)
+        self.fig_ctr = fig_ctr
+
+class Transit(Event):
+    def __init__(self, filename, particleID):
+        Event.__init__(self, filename)
+        self.particleID = particleID
+
+class Conjunction(Event):
+    def __init__(self, filename, innerID, outerID):
+        Event.__init__(self, filename)
+        self.innerID = innerID
+        self.outerID = outerID
+
 class System():
-    def __init__(self, filename, bpm, time_per_beat=None, dt=None, dt_epsilon=1.e-5, outer_midi_note=48, fps=30, exact_midi_times=True):
+    def __init__(self, sim, time_per_sec, dt=None, dt_epsilon=1.e-5, outer_midi_note=48, fps=30, exact_midi_times=True):
         try:
             call("rm -f ./tmp/*", shell=True)
         except:
             pass
         self.midi = MIDIFile(adjust_origin=True) # One track, defaults to format 1 (tempo track automatically created)
-        self.filename = filename
-        self.sim = rebound.Simulation.from_file(filename)
+        self.sim = sim
+        for i, p in enumerate(sim.particles):
+            p.hash = rebhash(i)
         self.exact_midi_times = exact_midi_times
         if self.exact_midi_times:
             self.sim.integrator = "ias15"
         self.sim.t = 0
         self.dt_epsilon = dt_epsilon
         
-        self.bpm = bpm
+        self.time_per_sec = time_per_sec
         self.fps = fps
         self.fig_ctr = 0
+        self.event_ctr = 0
         self.time_elapsed = 0
         self.time_per_fig = 1./self.fps
         
@@ -86,18 +128,20 @@ class System():
         self.conjunction_notes = [12 for i in range(self.sim.N)] # C1
         self.conjunction_velocities = [100 for i in range(self.sim.N)]
         
-        if time_per_beat:
-            self.time_per_beat = time_per_beat
-        else:
-            self.time_per_beat = self.sim.particles[-1].P
-        set_time_per_beat(self.sim, self.time_per_beat)
-        self.change_tempo(bpm)
         if not dt:
             self.dt = self.sim.particles[1].P/5.
         else:
             self.dt = dt
         self.fig_params = []
         self.conjunctions = []
+        self.transits = []
+        self.frames = []
+        self._recordtransits = False
+        self._recordconjunctions = False
+        self._showplanets = True
+        self._showtransits = False
+        self._showconjunctions = False
+
     def calc_midi_notes(self, outer_midi_note):
         # 12 notes between octaves, freq = f0*2**(n/12). 
         # n = 12 log_2(freq/f0)
@@ -142,58 +186,112 @@ class System():
             oldt = midt # next iteration starts at midt
             oldval = get_val(sim2)
         return sim2.t
+    
+    @property
+    def recordtransits(self):
+        return self.make_tuple(self._recordtransits)
+    @recordtransits.setter
+    def recordtransits(self, value):
+        self._recordtransits = value
+    @property
+    def recordconjunctions(self):
+        return self.make_tuple(self._recordconjunctions)
+    @recordconjunctions.setter
+    def recordconjunctions(self, value): 
+        self._recordconjunctions= value
+    @property
+    def showplanets(self):
+        return self.make_tuple(self._showplanets)
+    @showplanets.setter
+    def showplanets(self, value):
+        self._showplanets= value
+    @property
+    def showtransits(self):
+        return self.make_tuple(self._showtransits)
+    @showtransits.setter
+    def showtransits(self, value):
+        self._showtransits = value
+    @property
+    def showconjunctions(self):
+        return self.make_tuple(self._showconjunctions)
+    @showconjunctions.setter
+    def showconjunctions(self, value):
+        self._showconjunctions = value
 
-    def integrate(self, tmax, color=True, duration=1, track=0, playtransits=True, playconjunctions=False, showplanets=True, showtransits=True, showconjunctions=True, planetentrance=False):
-        playtransits = self.make_tuple(playtransits)
-        playconjunctions = self.make_tuple(playconjunctions)
-        showplanets = self.make_tuple(showplanets)
-        showtransits = self.make_tuple(showtransits)
-        showconjunctions = self.make_tuple(showconjunctions)
+    def findtransits(self, yprev, prevt):
+        ps = self.sim.particles
+        for i, pid in enumerate(self.recordtransits):
+            if yprev[i] < 0 and ps[pid].y > 0: # Crossed x axis
+                if self.exact_midi_times:
+                    t = self.find_exact_crossing_time(lambda sim: sim.particles[pid].y, prevt)
+                else:
+                    t = self.sim.t
+                print("Transit: {0}\t{1}".format(t, ps[pid].index))
+                #self.midi.addNote(track, ps[pid].index, self.notes[i], t, duration, self.velocities[i])
+                filename = "tmp/event"+str(self.event_ctr)+".bin"
+                self.sim.save(filename)
+                self.event_ctr += 1
+                self.transits.append(Transit(filename, pid))
+                #if pid==self.recordtransits[0]:  
+                #    new_entrance=True
+            yprev[i] = ps[pid].y
+        return yprev
+
+    def findconjunctions(self, sinthetaprev, prevt):
+        ps = self.sim.particles
+        for i, pair in enumerate(self.recordconjunctions):
+            innerID, outerID = pair
+            sintheta = np.sin(ps[outerID].theta-ps[innerID].theta)
+            if sinthetaprev[i] > 0 and sintheta < 0:
+                if self.exact_midi_times:
+                    t = self.find_exact_crossing_time(lambda sim: np.sin(sim.particles[outerID].theta-sim.particles[innerID].theta), prevt)
+                else:
+                    t = self.sim.t
+                print('Conjunction: {0}\t{1}'.format(t, innerID))
+                #self.conjunctions.append((self.sim.t, innerID, ps[j].x, ps[j].y))
+                filename = "tmp/event"+str(self.event_ctr)+".bin"
+                self.sim.save(filename)
+                self.event_ctr += 1
+                self.conjunctions.append(Conjunction(filename, innerID, outerID))
+                #self.midi.addNote(track, N, self.conjunction_notes[innerID], t, duration, self.conjunction_velocities[innerID]) # add to track above all planets
+            sinthetaprev[i] = sintheta
+        return sinthetaprev
+
+    def integrate(self, tmax, color=True, duration=1, track=0, planetentrance=False):
         new_entrance=False  #if planetentrance==True this will only show innermost planet once it transits for the first time
         
         N=self.sim.N
         ps = self.sim.particles
-        yprev = np.zeros(N)
-        sinthetaprev = np.zeros(N)
+        yprev = np.zeros(len(self.recordtransits))
+        sinthetaprev = np.zeros(len(self.recordconjunctions))
         while self.sim.t < tmax:
             prevt = self.sim.t
             self.sim.integrate(self.sim.t+self.dt)
             #print(self.sim.t, self.sim.particles[1].x, self.sim.particles[1].y)
-            self.time_elapsed += self.dt/self.bpm*60.
-            for j in playtransits:
-                if yprev[j] < 0 and ps[j].y > 0: # Crossed x axis
-                    #if j==1:
-                    #    print(self.sim.t)
-                    if self.exact_midi_times:
-                        t = self.find_exact_crossing_time(lambda sim: sim.particles[j].y, prevt)
-                    else:
-                        t = self.sim.t
-                    self.midi.addNote(track, ps[j].index, self.notes[j], t, duration, self.velocities[j])
-                    if j==playtransits[0]:  
-                        new_entrance=True
-                yprev[j] = ps[j].y
-       
-            for j in playconjunctions:
-                if j+1 in playconjunctions:
-                    sintheta = np.sin(ps[j+1].theta-ps[j].theta)
-                    if sinthetaprev[j] > 0 and sintheta < 0:
-                        if self.exact_midi_times:
-                            t = self.find_exact_crossing_time(lambda sim: np.sin(sim.particles[j+1].theta-sim.particles[j].theta), prevt)
-                        else:
-                            t = self.sim.t
-                        #print('conjunction', t, j)
-                        self.conjunctions.append((self.sim.t, j, ps[j].x, ps[j].y))
-                        self.midi.addNote(track, N, self.conjunction_notes[j], t, duration, self.conjunction_velocities[j]) # add to track above all planets
-                    sinthetaprev[j] = sintheta
+            self.time_elapsed += self.dt/self.time_per_sec #self.dt/self.bpm*60.
+            
+            yprev = self.findtransits(yprev, prevt) 
+            sinthetaprev = self.findconjunctions(sinthetaprev, prevt)
+
             if self.time_elapsed/self.time_per_fig > self.fig_ctr + 1:
-                if len(playtransits)>1 and planetentrance==True and new_entrance==False:
-                    #print('Waiting for new entrance:', self.sim.t,tuple(showplanets))
-                    self.fig_params.append([self.fig_ctr, self.sim.t, self.filename, self.time_per_beat, color, tuple(showplanets)[1:], tuple(showtransits)[1:], tuple(showconjunctions), tuple(self.conjunctions)])
+                if len(self.recordtransits)>1 and planetentrance==True and new_entrance==False:
+                    #print('Waiting for new entrance:', self.sim.t,tuple(self.showplanets))
+                    print('Figure waiting for new entrance: {0}\t{1}\t{2}'.format(self.fig_ctr, self.sim.t, tuple(self.showplanets)[1:]))
+                    filename = "tmp/event"+str(self.event_ctr)+".bin"
+                    self.sim.save(filename)
+                    self.event_ctr += 1
+                    self.frames.append(Frame(filename, self.fig_ctr))
+                    #self.fig_params.append([self.fig_ctr, self.sim.t, color, tuple(self.showplanets)[1:], tuple(self.showtransits)[1:], tuple(self.showconjunctions), tuple(self.conjunctions)])
                 else:
-                    self.fig_params.append([self.fig_ctr, self.sim.t, self.filename, self.time_per_beat, color, tuple(showplanets), tuple(showtransits), tuple(showconjunctions), tuple(self.conjunctions)])
+                    print('Figure: {0}\t{1}\t{2}'.format(self.fig_ctr, self.sim.t, tuple(self.showplanets)[1:]))
+                    #self.fig_params.append([self.fig_ctr, self.sim.t, color, tuple(self.showplanets), tuple(self.showtransits), tuple(self.showconjunctions), tuple(self.conjunctions)])
+                    filename = "tmp/event"+str(self.event_ctr)+".bin"
+                    self.sim.save(filename)
+                    self.frames.append(Frame(filename, self.fig_ctr))
                 self.fig_ctr += 1
     def change_tempo(self, bpm):
         self.bpm = bpm
+        self.time_per_sec = self.bpm/60.
         self.midi.addTempo(0, self.sim.t, self.bpm) 
     def write_midi(self, midiname):
         with open("./"+midiname+".mid", "wb") as f:
