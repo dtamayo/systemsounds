@@ -27,7 +27,54 @@ integrate:
     self.midi.addNote(track, N, self.conjunction_notes[j], t, duration, self.conjunction_velocities[j]) # add to track above all planets
     hash?
 """
+def copysim2(sim):
+    sim2 = rebound.Simulation()
+    sim2.G = sim.G
+    sim2.t = sim.t
+    for p in sim.particles:
+        sim2.add(p)
+    return sim2
 
+def find_exact_crossing_time2(sim, get_val, target, epsilon=1.e-6): # do bisection to find exact crossing time
+    sim2 = copysim2(sim)
+    oldt = sim.t # need to go back from overshot t to previous value
+    newt = sim.t - sim.dt_last_done/2. 
+    sim2.dt *= -1
+    oldval = get_val(sim2, target) 
+    while (abs(newt - oldt)/oldt > epsilon):
+        midt = (newt + oldt)/2.
+        #print(oldt, newt, midt, get_val(sim2))
+        sim2.integrate(midt)
+        val = get_val(sim2, target)
+        if oldval*val < 0.: # switched sign
+            newt = oldt # go back to prev value
+            sim2.dt *= -0.3
+        else: # keep integrating toward newt
+            sim2.dt *= 0.3
+        oldt = midt # next iteration starts at midt
+        oldval = val
+    return sim2.t
+
+def findroot(system, getstoragelist, gettargetlist=None): # pass lambdas for lists to avoid referencing stale variables if they happen to get reassigned
+    if gettargetlist is None:
+        def gettargetlist(system): return list(range(1,system.N))
+    def deco(f):
+        deco.oldval = [None]*system.N
+        def wrapped_f(reb_sim): # heartbeat is called with ctypes pointer to a rebound simulation, not the System subclass
+            sim = reb_sim.contents
+            ps = sim.particles
+            print(gettargetlist(system))
+            for i, target in enumerate(gettargetlist(system)):
+                val = f(sim, target)
+                if deco.oldval[i] is not None:          # not first call
+                    if deco.oldval[i] < 0 and val > 0:  # Crossed from negative to positive
+                        t = find_exact_crossing_time2(sim, f, target)
+                        print("Transit: {0}\t{1}".format(t, target))
+                        #self.midi.addNote(track, ps[pid].index, self.notes[i], t, duration, self.velocities[i])
+                        getstoragelist(system).append(Event(t, target))
+                deco.oldval[i] = val
+        return wrapped_f
+    return deco
 
 def rescale_time(sim, timescale): # Rescale time by timescale, i.e. timescale time units will now correspond to 1 time units
     ps = sim.particles
@@ -81,9 +128,10 @@ def write_png(params):
     plt.close(fig)  
 
 class Event():
-    def __init__(self, filename):
-        self.filename = filename
-
+    def __init__(self, t, target):
+        self.t = t
+        self.target = target
+'''
 class Frame(Event):
     def __init__(self, filename, fig_ctr):
         Event.__init__(self, filename)
@@ -99,7 +147,7 @@ class Conjunction(Event):
         Event.__init__(self, filename)
         self.innerID = innerID
         self.outerID = outerID
-
+'''
 class System(rebound.Simulation):
     def __init__(self, time_per_sec=1, dt=None, dt_epsilon=1.e-5, outer_midi_note=48, fps=30, exact_midi_times=True):
         super(System, self).__init__()
@@ -144,8 +192,16 @@ class System(rebound.Simulation):
         self.transits = []
         self.frames = []
 
-        self._yprev = [None]*self.N
-    
+        self.recordtransits = []
+
+        @findroot(self, lambda s: s.transits, lambda s: s.recordtransits)
+        def ftransits(sim, i):
+            return sim.particles[i].y
+
+        def hb(sim):
+            ftransits(sim)
+        self.heartbeat = hb
+
     def calc_midi_notes(self, outer_midi_note):
         # 12 notes between octaves, freq = f0*2**(n/12). 
         # n = 12 log_2(freq/f0)
@@ -156,56 +212,6 @@ class System(rebound.Simulation):
             midinote = outer_midi_note+12*np.log(ps[-1].P/p.P)/np.log(2)
             midinotes.append(int(np.round(midinote)))
         return midinotes  
-    def make_tuple(self, arg):
-        N = self.sim.N
-        if arg == True:
-            return tuple(range(1,N))
-        elif arg == False:
-            return ()
-        else:
-            return tuple(arg)
-    def copysim(self):
-        sim = rebound.Simulation()
-        sim.G = self.sim.G
-        sim.t = self.sim.t
-        for p in self.sim.particles:
-            sim.add(p)
-        return sim
-
-    def find_exact_crossing_time(self, get_val, prevt): # do bisection to find exact crossing time
-        sim2 = self.copysim()
-        oldt = self.sim.t # need to go back from overshot t to previous value
-        newt = prevt 
-        sim2.dt *= -1
-        oldval = get_val(sim2) #ps[j].y
-        while (abs(newt - oldt)> self.dt_epsilon):
-            midt = (newt + oldt)/2.
-            #print(oldt, newt, midt, get_val(sim2))
-            sim2.integrate(midt)
-            if oldval*get_val(sim2) < 0.: # switched sign
-                newt = oldt # go back to prev value
-                sim2.dt *= -0.3
-            else: # keep integrating toward newt
-                sim2.dt *= 0.3
-            oldt = midt # next iteration starts at midt
-            oldval = get_val(sim2)
-        return sim2
-
-    def findtransits(self, yprev, prevt):
-        ps = self.sim.particles
-        for i in range(1, self.sim.N):
-            if yprev[i] < 0 and ps[i].y > 0: # Crossed x axis
-                transitsim = self.find_exact_crossing_time(lambda sim: sim.particles[i].y, prevt)
-                print("Transit: {0}\t{1}".format(transitsim.t, i))
-                #self.midi.addNote(track, ps[pid].index, self.notes[i], t, duration, self.velocities[i])
-                filename = ''
-                #filename = "tmp/event"+str(self.event_ctr)+".bin"
-                #self.sim.save(filename)
-                #self.event_ctr += 1
-                self.transits.append(Transit(filename, i))
-            yprev[i] = ps[i].y
-        return yprev
-
     def findconjunctions(self, sinthetaprev, prevt):
         ps = self.sim.particles
         for i, pair in enumerate(self.recordconjunctions):
@@ -225,50 +231,7 @@ class System(rebound.Simulation):
                 #self.midi.addNote(track, N, self.conjunction_notes[innerID], t, duration, self.conjunction_velocities[innerID]) # add to track above all planets
             sinthetaprev[i] = sintheta
         return sinthetaprev
-    
-    def copysim2(sim):
-        sim2 = rebound.Simulation()
-        sim2.G = sim.G
-        sim2.t = sim.t
-        for p in sim.particles:
-            sim2.add(p)
-        return sim2
-    
-    def find_exact_crossing_time2(sim, f): # do bisection to find exact crossing time
-        sim2 = copysim2(sim)
-        oldt = self.sim.t # need to go back from overshot t to previous value
-        newt = prevt 
-        sim2.dt *= -1
-        oldval = get_val(sim2) #ps[j].y
-        while (abs(newt - oldt)> self.dt_epsilon):
-            midt = (newt + oldt)/2.
-            #print(oldt, newt, midt, get_val(sim2))
-            sim2.integrate(midt)
-            if oldval*get_val(sim2) < 0.: # switched sign
-                newt = oldt # go back to prev value
-                sim2.dt *= -0.3
-            else: # keep integrating toward newt
-                sim2.dt *= 0.3
-            oldt = midt # next iteration starts at midt
-            oldval = get_val(sim2)
-        return sim2
 
-    def findtransits2(sim):
-        ps = sim.particles
-        for i in range(1, sim.N):
-            if sim._yprev[i] < 0 and ps[i].y > 0: # Crossed x axis
-                transitsim = find_exact_crossing_time2(sim, lambda s: s.particles[i].y)
-                print("Transit: {0}\t{1}".format(transitsim.t, i))
-                #self.midi.addNote(track, ps[pid].index, self.notes[i], t, duration, self.velocities[i])
-                filename = ''
-                #filename = "tmp/event"+str(self.event_ctr)+".bin"
-                #self.sim.save(filename)
-                #self.event_ctr += 1
-                self.transits.append(Transit(filename, i))
-            sim._yprev[i] = ps[i].y
-
-    def hb(sim):
-        findtransits2(sim)
 
     '''
     def integrate(self, tmax, color=True, duration=1, track=0, planetentrance=False):
