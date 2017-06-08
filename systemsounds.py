@@ -53,8 +53,8 @@ class EventRecorder(object):
         self.events = []
         self._oldvals = {}
         self.targets = targets
-        self.add_to_heartbeat(sim, rootfunc)
-    def add_to_heartbeat(self, sim, rootfunc):
+        self.add_event_recorder_to_heartbeat(sim, rootfunc)
+    def add_event_recorder_to_heartbeat(self, sim, rootfunc):
         def check_for_root_crossings(reb_sim):
             sim = reb_sim.contents
             ps = sim.particles
@@ -62,13 +62,15 @@ class EventRecorder(object):
                 val = rootfunc(sim, target)
                 if self._oldvals[target] is not None:           # not first call
                     if self._oldvals[target] < 0 and val > 0:   # crossed from negative to positive
-                        t = self.bisection(sim, rootfunc, target)
-                        self.store_event(t, target)
+                        sim_root_crossing = self.bisection(sim, rootfunc, target)
+                        self.process_event(sim_root_crossing, target)
                 self._oldvals[target] = val
         prepend_to_heartbeat(sim, check_for_root_crossings)
 
-    def store_event(self, t, target):
-        self.events.append(Event(t, target))
+    def process_event(self, sim, target, params={}):
+        params['t'] = sim.t
+        params['target'] = target
+        self.events.append(params)
 
     def bisection(self, sim, rootfunc, target, epsilon=1.e-6): # bisection to find crossing time
         sim2 = copysim(sim)
@@ -87,7 +89,7 @@ class EventRecorder(object):
                 sim2.dt *= 0.3
             oldt = midt # next iteration starts at midt
             oldval = val
-        return sim2.t
+        return sim2
 
     @property
     def targets(self):
@@ -99,18 +101,34 @@ class EventRecorder(object):
             if target not in self._oldvals.keys():
                 self._oldvals[target] = None
 
-def frame_root_func(sim, target):
-    pass
 class FrameRecorder(EventRecorder):
     def __init__(self, sim, time_per_sec, fps=30):
+        try:
+            call("rm -f ./tmp/*", shell=True)
+        except:
+            pass
         self.fps = fps
         self.time_per_sec = time_per_sec
         self._frame_ctr = 0
-        self._fig_timer = 0
-        super(FrameRecorder, self).__init__()
-    def get_root_func(self):
+        self._last_frame_time = sim.t
+        
         def root_func(sim, target=None):
-            pass
+            return sim.t - self._last_frame_time - 1./self.fps
+        super(FrameRecorder, self).__init__(sim, root_func)
+
+    def process_event(self, frame_sim, target=None):
+        filename = "tmp/binaries/frame"+str(self._frame_ctr)+".bin"
+        frame_sim.save(filename)
+        self._last_frame_time = frame_sim.t
+        
+        params={}
+        for key in self.__dict__.keys():
+            if key is not "events":
+                params[key] = self.__dict__[key]
+        self._frame_ctr += 1
+                            
+        super(FrameRecorder, self).process_event(frame_sim, target, params)
+            
 def write_png(params):
     fig_ctr, time, filename, time_per_beat, color, showparticles, showtransits, showconjunctions, conjunctions, background, transparent = params
     coloriterator = [color[i] for i in showparticles]
@@ -220,7 +238,7 @@ class System(rebound.Simulation):
     def time_per_sec(self, value):
         self._time_per_sec = value
     def write_images(self):
-        call("rm -f tmp/pngs/*", shell=True)
+        call("rm -f tmp/pngs/*", shell=true)
         pool = rebound.InterruptiblePool()
         for a in self.fig_params:
             a.append(None)
