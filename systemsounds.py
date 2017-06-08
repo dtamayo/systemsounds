@@ -20,55 +20,6 @@ def calc_midi_notes(particles, ref_note, ref_ID): # creates midi notes by scalin
         midinotes.append(int(np.round(midinote)))
     return midinotes  
 
-def copysim(sim):
-    sim2 = rebound.Simulation()
-    sim2.G = sim.G
-    sim2.t = sim.t
-    for p in sim.particles:
-        sim2.add(p)
-    return sim2
-
-def find_exact_crossing_time(sim, get_val, target, epsilon=1.e-6): # do bisection to find exact crossing time
-    sim2 = copysim(sim)
-    oldt = sim.t # need to go back from overshot t to previous value
-    newt = sim.t - sim.dt_last_done/2. 
-    sim2.dt *= -1
-    oldval = get_val(sim2, target) 
-    while (abs(newt - oldt)/oldt > epsilon):
-        midt = (newt + oldt)/2.
-        sim2.integrate(midt)
-        val = get_val(sim2, target)
-        if oldval*val < 0.: # switched sign
-            newt = oldt # go back to prev value
-            sim2.dt *= -0.3
-        else: # keep integrating toward newt
-            sim2.dt *= 0.3
-        oldt = midt # next iteration starts at midt
-        oldval = val
-    return sim2.t
-
-def add_rootfinder_to_heartbeat(system, f, getstoragelist, gettargetlist=None): # pass lambdas for lists to avoid referencing stale variables if they happen to get reassigned
-    if gettargetlist is None:
-        def gettargetlist(system): return list(range(1,system.N))
-    f.oldval = dict(zip(range(1,system.N),[None]*system.N)) # store old values here so accessible as a closure
-    try: # start with a function that does nothing if _hbeat not set
-        f.oldhb = system._hbeat
-    except:
-        f.oldhb =  lambda s: None
-    def hb_wrapper(reb_sim): # heartbeat is called with ctypes pointer to a rebound simulation, not the System subclass
-        sim = reb_sim.contents
-        f.oldhb(reb_sim)
-        ps = sim.particles
-        for target in gettargetlist(system):
-            val = f(sim, target)
-            if f.oldval[target] is not None:          # not first call
-                if f.oldval[target] < 0 and val > 0:  # Crossed from negative to positive
-                    t = find_exact_crossing_time(sim, f, target)
-                    getstoragelist(system).append(Event(t, target))
-            f.oldval[target] = val
-    system._hbeat = hb_wrapper
-    system.heartbeat = hb_wrapper
-
 def rescale_time(sim, timescale): # Rescale time by timescale, i.e. timescale time units will now correspond to 1 time units
     ps = sim.particles
     sim.G *= timescale**2
@@ -78,6 +29,88 @@ def rescale_time(sim, timescale): # Rescale time by timescale, i.e. timescale ti
         p.vy *= timescale
         p.vz *= timescale
 
+def prepend_to_heartbeat(sim, func):
+    try:    # can't store sim.heartbeat b/c ctypes returns new object each time so we'd always get latest hb
+        oldhb = sim._pyheartbeat                      
+    except AttributeError:
+        oldhb = lambda s: None
+    def heartbeat(reb_sim):
+        oldhb(reb_sim)
+        func(reb_sim)
+    sim._pyheartbeat = heartbeat                            # store python function in sim
+    sim.heartbeat = heartbeat                               # update ctypes function wrapper in sim
+
+def copysim(sim):                                     # should eventually add better version to REBOUND
+    sim2 = rebound.Simulation()
+    sim2.G = sim.G
+    sim2.t = sim.t
+    for p in sim.particles:
+        sim2.add(p)
+    return sim2
+
+class EventRecorder(object):
+    def __init__(self, sim, rootfunc, targets=[None]):
+        self.events = []
+        self._oldvals = {}
+        self.targets = targets
+        self.add_to_heartbeat(sim, rootfunc)
+    def add_to_heartbeat(self, sim, rootfunc):
+        def check_for_root_crossings(reb_sim):
+            sim = reb_sim.contents
+            ps = sim.particles
+            for target in self.targets:
+                val = rootfunc(sim, target)
+                if self._oldvals[target] is not None:           # not first call
+                    if self._oldvals[target] < 0 and val > 0:   # crossed from negative to positive
+                        t = self.bisection(sim, rootfunc, target)
+                        self.store_event(t, target)
+                self._oldvals[target] = val
+        prepend_to_heartbeat(sim, check_for_root_crossings)
+
+    def store_event(self, t, target):
+        self.events.append(Event(t, target))
+
+    def bisection(self, sim, rootfunc, target, epsilon=1.e-6): # bisection to find crossing time
+        sim2 = copysim(sim)
+        oldt = sim.t # need to go back from overshot t to previous value
+        newt = sim.t - sim.dt_last_done/2. 
+        sim2.dt *= -1
+        oldval = rootfunc(sim2, target) 
+        while (abs(newt - oldt)/oldt > epsilon):
+            midt = (newt + oldt)/2.
+            sim2.integrate(midt)
+            val = rootfunc(sim2, target)
+            if oldval*val < 0.: # switched sign
+                newt = oldt # go back to prev value
+                sim2.dt *= -0.3
+            else: # keep integrating toward newt
+                sim2.dt *= 0.3
+            oldt = midt # next iteration starts at midt
+            oldval = val
+        return sim2.t
+
+    @property
+    def targets(self):
+        return self._targets
+    @targets.setter
+    def targets(self, iterator):
+        self._targets = iterator
+        for target in iterator:
+            if target not in self._oldvals.keys():
+                self._oldvals[target] = None
+
+def frame_root_func(sim, target):
+    pass
+class FrameRecorder(EventRecorder):
+    def __init__(self, sim, time_per_sec, fps=30):
+        self.fps = fps
+        self.time_per_sec = time_per_sec
+        self._frame_ctr = 0
+        self._fig_timer = 0
+        super(FrameRecorder, self).__init__()
+    def get_root_func(self):
+        def root_func(sim, target=None):
+            pass
 def write_png(params):
     fig_ctr, time, filename, time_per_beat, color, showparticles, showtransits, showconjunctions, conjunctions, background, transparent = params
     coloriterator = [color[i] for i in showparticles]
@@ -124,14 +157,6 @@ class Event():
     def __init__(self, t, target):
         self.t = t
         self.target = target
-class Tempo():
-    def __init__(self, t, time_per_sec):
-        self.t = t
-        self.time_per_sec = time_per_sec
-class Frame():
-    def __init__(self, t, filename):
-        self.t = t
-        self.filename = filename
 
 class System(rebound.Simulation):
     def __init__(self, fps=30):
@@ -185,8 +210,8 @@ class System(rebound.Simulation):
         self.heartbeat = hb_wrapper
         self._hbeat = hb_wrapper 
 
-        add_rootfinder_to_heartbeat(self, lambda sim, i: sim.particles[i].y, lambda s: s.transits, lambda s: s.recordtransits)
-        add_rootfinder_to_heartbeat(self, lambda sim, i: np.sin(sim.particles[i].theta - sim.particles[i+1].theta), lambda s: s.conjunctions, lambda s: s.recordconjunctions)
+        #add_rootfinder_to_heartbeat(self, lambda sim, i: sim.particles[i].y, lambda s: s.transits, lambda s: s.recordtransits)
+        #add_rootfinder_to_heartbeat(self, lambda sim, i: np.sin(sim.particles[i].theta - sim.particles[i+1].theta), lambda s: s.conjunctions, lambda s: s.recordconjunctions)
    
     @property
     def time_per_sec(self): # time_per_sec is beats per second, so just bpm/60
@@ -194,7 +219,6 @@ class System(rebound.Simulation):
     @time_per_sec.setter
     def time_per_sec(self, value):
         self._time_per_sec = value
-        self.tempo.append(Tempo(self.t, self._time_per_sec))
     def write_images(self):
         call("rm -f tmp/pngs/*", shell=True)
         pool = rebound.InterruptiblePool()
@@ -224,104 +248,3 @@ class System(rebound.Simulation):
             except:
                 pass
             call("ffmpeg -r {0} -i tmp/pngs/%05d.png -c:v libx264 -pix_fmt yuv420p {1}.mp4".format(fps, moviename), shell=True)        
-def findroot(system, getstoragelist, gettargetlist=None): # pass lambdas for lists to avoid referencing stale variables if they happen to get reassigned
-    if gettargetlist is None:
-        def gettargetlist(system): return list(range(1,system.N))
-    def deco(f):
-        f.oldval = dict(zip(range(1,system.N),[None]*system.N)) # store old values here so accessible as a closure
-        try:
-            f.oldhb = system._hbeat
-        except:
-            f.oldhb =  lambda s: None
-        def hb_wrapper(reb_sim): # heartbeat is called with ctypes pointer to a rebound simulation, not the System subclass
-            sim = reb_sim.contents
-            f.oldhb(reb_sim)
-            ps = sim.particles
-            for target in gettargetlist(system):
-                val = f(sim, target)
-                if f.oldval[target] is not None:          # not first call
-                    if f.oldval[target] < 0 and val > 0:  # Crossed from negative to positive
-                        t = find_exact_crossing_time(sim, f, target)
-                        getstoragelist(system).append(Event(t, target))
-                f.oldval[target] = val
-        system._hbeat = hb_wrapper
-        system.heartbeat = hb_wrapper
-        return hb_wrapper
-    return deco
-
-def findroot(system, getstoragelist, gettargetlist=None): # pass lambdas for lists to avoid referencing stale variables if they happen to get reassigned
-    if gettargetlist is None:
-        def gettargetlist(system): return list(range(1,system.N))
-    def deco(f):
-        f.oldval = dict(zip(range(1,system.N),[None]*system.N)) # store old values here so accessible as a closure
-        try:
-            f.oldhb = system._hbeat
-        except:
-            f.oldhb =  lambda s: None
-        def hb_wrapper(reb_sim): # heartbeat is called with ctypes pointer to a rebound simulation, not the System subclass
-            sim = reb_sim.contents
-            f.oldhb(reb_sim)
-            ps = sim.particles
-            for target in gettargetlist(system):
-                val = f(sim, target)
-                if f.oldval[target] is not None:          # not first call
-                    if f.oldval[target] < 0 and val > 0:  # Crossed from negative to positive
-                        t = find_exact_crossing_time(sim, f, target)
-                        getstoragelist(system).append(Event(t, target))
-                f.oldval[target] = val
-        system._hbeat = hb_wrapper
-        system.heartbeat = hb_wrapper
-        return hb_wrapper
-    return deco
-
-def findroot(system, getstoragelist, gettargetlist=None): # pass lambdas for lists to avoid referencing stale variables if they happen to get reassigned
-    if gettargetlist is None:
-        def gettargetlist(system): return list(range(1,system.N))
-    def deco(f):
-        f.oldval = dict(zip(range(1,system.N),[None]*system.N)) # store old values here so accessible as a closure
-        try:
-            f.oldhb = system._hbeat
-        except:
-            f.oldhb =  lambda s: None
-        def hb_wrapper(reb_sim): # heartbeat is called with ctypes pointer to a rebound simulation, not the System subclass
-            sim = reb_sim.contents
-            f.oldhb(reb_sim)
-            ps = sim.particles
-            for target in gettargetlist(system):
-                val = f(sim, target)
-                if f.oldval[target] is not None:          # not first call
-                    if f.oldval[target] < 0 and val > 0:  # Crossed from negative to positive
-                        t = find_exact_crossing_time(sim, f, target)
-                        getstoragelist(system).append(Event(t, target))
-                f.oldval[target] = val
-        system._hbeat = hb_wrapper
-        system.heartbeat = hb_wrapper
-        return hb_wrapper
-    return deco
-
-def findroot(system, getstoragelist, gettargetlist=None): # pass lambdas for lists to avoid referencing stale variables if they happen to get reassigned
-    if gettargetlist is None:
-        def gettargetlist(system): return list(range(1,system.N))
-    def deco(f):
-        f.oldval = dict(zip(range(1,system.N),[None]*system.N)) # store old values here so accessible as a closure
-        try:
-            f.oldhb = system._hbeat
-        except:
-            f.oldhb =  lambda s: None
-        def hb_wrapper(reb_sim): # heartbeat is called with ctypes pointer to a rebound simulation, not the System subclass
-            sim = reb_sim.contents
-            f.oldhb(reb_sim)
-            ps = sim.particles
-            for target in gettargetlist(system):
-                val = f(sim, target)
-                if f.oldval[target] is not None:          # not first call
-                    if f.oldval[target] < 0 and val > 0:  # Crossed from negative to positive
-                        t = find_exact_crossing_time(sim, f, target)
-                        getstoragelist(system).append(Event(t, target))
-                f.oldval[target] = val
-        system._hbeat = hb_wrapper
-        system.heartbeat = hb_wrapper
-        return hb_wrapper
-    return deco
-
-        
