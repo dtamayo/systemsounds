@@ -1,10 +1,8 @@
 from midiutil import MIDIFile
 import rebound
-from rebound import hash as rebhash
 import numpy as np
 import matplotlib.pyplot as plt
 from subprocess import call
-from itertools import repeat
 import PIL # reminder that this is a requirement
 from scipy.misc import imread
 import warnings
@@ -40,7 +38,7 @@ def prepend_to_heartbeat(sim, func):
     sim._pyheartbeat = heartbeat                            # store python function in sim
     sim.heartbeat = heartbeat                               # update ctypes function wrapper in sim
 
-def copysim(sim):                                     # should eventually add better version to REBOUND
+def copysim(sim):                                           # should eventually add better version to REBOUND
     sim2 = rebound.Simulation()
     sim2.G = sim.G
     sim2.t = sim.t
@@ -49,10 +47,10 @@ def copysim(sim):                                     # should eventually add be
     return sim2
 
 class EventRecorder(object):
-    def __init__(self, sim, rootfunc, targets=[None]):
+    def __init__(self, sim, rootfunc, targets=None):
         self.events = []
         self._oldvals = {}
-        self.targets = targets
+        self.targets = range(1, sim.N) if targets is None else targets
         self.add_event_recorder_to_heartbeat(sim, rootfunc)
     def add_event_recorder_to_heartbeat(self, sim, rootfunc):
         def check_for_root_crossings(reb_sim):
@@ -67,9 +65,11 @@ class EventRecorder(object):
                 self._oldvals[target] = val
         prepend_to_heartbeat(sim, check_for_root_crossings)
 
-    def process_event(self, sim, target, params={}):
-        params['t'] = sim.t
-        params['target'] = target
+    def process_event(self, sim, target):
+        params={'time':sim.t, 'target':target}
+        for key in self.__dict__.keys():
+            if key.startswith('_') is False and key is not "events":
+                params[key] = self.__dict__[key]
         self.events.append(params)
 
     def bisection(self, sim, rootfunc, target, epsilon=1.e-6): # bisection to find crossing time
@@ -102,41 +102,35 @@ class EventRecorder(object):
                 self._oldvals[target] = None
 
 class FrameRecorder(EventRecorder):
-    def __init__(self, sim, time_per_sec, fps=30):
+    def __init__(self, sim, time_per_sec, fps=30, plotParticles=None, color=False, ):
         try:
             call("rm -f ./tmp/*", shell=True)
         except:
             pass
         self.fps = fps
         self.time_per_sec = time_per_sec
-        self._frame_ctr = 0
+        self.frame_ctr = 0
         self._last_frame_time = sim.t
-        
+        self.plotParticles = range(1, sim.N) if plotParticles is None else plotParticles
+        self.color = False        
         def root_func(sim, target=None):
             return sim.t - self._last_frame_time - 1./self.fps
-        super(FrameRecorder, self).__init__(sim, root_func)
+        super(FrameRecorder, self).__init__(sim, root_func, targets=[None]) # no individual targets for timer, so pass iterator with single entry
 
     def process_event(self, frame_sim, target=None):
-        filename = "tmp/binaries/frame"+str(self._frame_ctr)+".bin"
-        frame_sim.save(filename)
+        self.filename = "tmp/binaries/frame"+str(self.frame_ctr)+".bin"
+        frame_sim.save(self.filename)
         self._last_frame_time = frame_sim.t
-        
-        params={}
-        for key in self.__dict__.keys():
-            if key is not "events":
-                params[key] = self.__dict__[key]
-        self._frame_ctr += 1
-                            
-        super(FrameRecorder, self).process_event(frame_sim, target, params)
-            
-def write_png(params):
-    fig_ctr, time, filename, time_per_beat, color, showparticles, showtransits, showconjunctions, conjunctions, background, transparent = params
-    coloriterator = [color[i] for i in showparticles]
-    sim = rebound.Simulation.from_file(filename)
-    sim.t=0
-    rescale_time(sim, time_per_beat)
+        self.frame_ctr += 1
+        super(FrameRecorder, self).process_event(frame_sim, target)
+           
+def write_png(frame_ctr, time, filename, plotparticles=None, color=False, showtransits=False, showconjunctions=False, background=True, loadsim=None):
+    #frame_ctr , time, filename, time_per_beat, color, showparticles, showtransits, showconjunctions, conjunctions, background, transparent = params
+    sim = loadsim(filename)
     sim.integrate(time)
     ps = sim.particles
+
+    coloriterator = [color[i] for i in plotparticles]
     
     lw=3
     fadetimescale = sim.particles[-1].P/3. # for conjunctions
@@ -147,13 +141,13 @@ def write_png(params):
     ax.axis('off')
         
     for i in showparticles:
-        p = ps[i]
-        ax.scatter(p.x, p.y, s=refsize, color=color[i], marker='o', zorder=4)
+        ax.scatter(ps[i].x, ps[i].y, s=refsize, color=color[i], marker='o', zorder=4)
     for i in showtransits:
-        p = ps[i]
-        scale=p.a/3 # length scale for making dots bigger
-        if p.x > 0 and np.abs(p.y)/scale < 1:
-            ax.scatter(p.x, p.y, s=refsize*(1+6*np.exp(-np.abs(p.y)/scale)),color=color[i], marker='o', zorder=5)
+        scale=ps[i].a/3 # length scale for making dots bigger
+        size=refsize
+        if ps[i].x > 0 and np.abs(ps[i].y)/scale < 1:
+            size *= 1+6*np.exp(-np.abs(ps[i].y)/scale)
+            ax.scatter(ps[i].x, ps[i].y, s=size, color=color[i], marker='o', zorder=5)
     
     xlim = ax.get_xlim()
     ylim = ax.get_ylim()
@@ -165,16 +159,11 @@ def write_png(params):
             if j in showconjunctions and j+1 in showconjunctions:
                 ax.plot([0, cscale*x], [0,cscale*y], lw=5, color=color[j], alpha=max(1.-(time-conjunction[0])/fadetimescale,0.), zorder=1)
        
-    if background:
-        bkg = imread('images/US_background_image.png')
-        ax.imshow(bkg, zorder=0, extent=xlim+ylim)
-    fig.savefig('tmp/pngs/{0:0=5d}.png'.format(fig_ctr), transparent=transparent,dpi=300)
-    plt.close(fig)  
+    bkg = imread('images/US_background_image.png')
+    ax.imshow(bkg, zorder=0, extent=xlim+ylim)
 
-class Event():
-    def __init__(self, t, target):
-        self.t = t
-        self.target = target
+    fig.savefig('tmp/pngs/{0:0=5d}.png'.format(frame_ctr), transparent=True, dpi=300)
+    plt.close(fig)  
 
 class System(rebound.Simulation):
     def __init__(self, fps=30):
@@ -210,27 +199,7 @@ class System(rebound.Simulation):
         
         self.time_per_sec = None
         self.set_heartbeat()
-    def set_heartbeat(self):
-        def heartbeat_wrapper(self):
-            def heartbeat(reb_sim):
-                time_elapsed = self.dt_last_done/self.time_per_sec 
-                self.time_elapsed += time_elapsed 
-                self._fig_timer += time_elapsed
-                if self._fig_timer > 1./self.fps:
-                    filename = "tmp/frame"+str(self._frame_ctr)+".bin"
-                    self.save(filename)
-                    self._frame_ctr += 1
-                    self.frames.append(Frame(self.t, filename))
-                    #print(self._frame_ctr, self._frame_ctr/self.fps, self.t/self.time_per_sec)
-                    self._fig_timer -= 1./self.fps
-            return heartbeat
-        hb_wrapper = heartbeat_wrapper(self)
-        self.heartbeat = hb_wrapper
-        self._hbeat = hb_wrapper 
 
-        #add_rootfinder_to_heartbeat(self, lambda sim, i: sim.particles[i].y, lambda s: s.transits, lambda s: s.recordtransits)
-        #add_rootfinder_to_heartbeat(self, lambda sim, i: np.sin(sim.particles[i].theta - sim.particles[i+1].theta), lambda s: s.conjunctions, lambda s: s.recordconjunctions)
-   
     @property
     def time_per_sec(self): # time_per_sec is beats per second, so just bpm/60
         return self._time_per_sec
