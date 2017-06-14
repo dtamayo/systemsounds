@@ -4,5 +4,6 @@
 *.mp4
 .ipynb_checkpoints/
 jupyter_examples/tmp/
+projects/
 __pycache__/
 .DS_Store
