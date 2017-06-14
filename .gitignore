@@ -3,5 +3,6 @@
 *.wav
 *.mp4
 .ipynb_checkpoints/
+jupyter_examples/tmp/
 __pycache__/
 .DS_Store

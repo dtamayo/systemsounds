@@ -206,32 +206,3 @@ class System(rebound.Simulation):
     @time_per_sec.setter
     def time_per_sec(self, value):
         self._time_per_sec = value
-    def write_images(self):
-        call("rm -f tmp/pngs/*", shell=true)
-        pool = rebound.InterruptiblePool()
-        for a in self.fig_params:
-            a.append(None)
-            a.append(False)
-        res = pool.map(write_png, self.fig_params)
-    def write_movie(self, moviename, midiname=None):
-        fps = 30
-        try:
-            call("rm -f {0}.mp4".format(moviename), shell=True)
-        except:
-            pass
-        
-        if midiname:
-            try:
-                call("rm -f ./tmp/{0}.wav".format(midiname), shell=True)
-                call("rm -f ./tmp/{0}cut.wav".format(midiname), shell=True)
-            except:
-                pass
-            call("timidity -Ow ./{0}.mid -o ./tmp/{0}.wav --preserve-silence".format(midiname), shell=True)
-            call("ffmpeg -t {0} -i ./tmp/{1}.wav ./tmp/{1}cut.wav".format(self.time_elapsed, midiname), shell=True)
-            call("ffmpeg -r {0} -i ./tmp/pngs/%05d.png -i tmp/{1}cut.wav -c:v libx264 -pix_fmt yuv420p -c:a libfdk_aac -b:a 192k -shortest {2}.mp4".format(fps, midiname, moviename), shell=True)   
-        else:
-            try:
-                call("rm -f {0}".format(moviename), shell=True)
-            except:
-                pass
-            call("ffmpeg -r {0} -i tmp/pngs/%05d.png -c:v libx264 -pix_fmt yuv420p {1}.mp4".format(fps, moviename), shell=True)        
