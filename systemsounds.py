@@ -75,7 +75,7 @@ class EventRecorder(object):
     def bisection(self, sim, rootfunc, target, epsilon=1.e-6): # bisection to find crossing time
         sim2 = copysim(sim)
         oldt = sim.t # need to go back from overshot t to previous value
-        newt = sim.t - sim.dt_last_done/2. 
+        newt = sim.t - sim.dt_last_done
         sim2.dt *= -1
         oldval = rootfunc(sim2, target) 
         while (abs(newt - oldt)/oldt > epsilon):
@@ -102,7 +102,7 @@ class EventRecorder(object):
                 self._oldvals[target] = None
 
 class FrameRecorder(EventRecorder):
-    def __init__(self, sim, time_per_sec, fps=30, plotParticles=None, color=False, ):
+    def __init__(self, sim, time_per_sec, fps=30, plotparticles=None):
         try:
             call("rm -f ./tmp/*", shell=True)
         except:
@@ -111,9 +111,9 @@ class FrameRecorder(EventRecorder):
         self.time_per_sec = time_per_sec
         self.frame_ctr = 0
         self._last_frame_time = sim.t
-        self.plotParticles = range(1, sim.N) if plotParticles is None else plotParticles
-        self.color = False        
+        self.plotparticles = range(1, sim.N) if plotparticles is None else plotparticles
         def root_func(sim, target=None):
+            #print(sim.t, sim.t - self._last_frame_time - 1./self.fps)
             return sim.t - self._last_frame_time - 1./self.fps
         super(FrameRecorder, self).__init__(sim, root_func, targets=[None]) # no individual targets for timer, so pass iterator with single entry
 
@@ -121,8 +121,8 @@ class FrameRecorder(EventRecorder):
         self.filename = "tmp/binaries/frame"+str(self.frame_ctr)+".bin"
         frame_sim.save(self.filename)
         self._last_frame_time = frame_sim.t
-        self.frame_ctr += 1
         super(FrameRecorder, self).process_event(frame_sim, target)
+        self.frame_ctr += 1
            
 def write_png(frame_ctr, time, filename, plotparticles=None, color=False, showtransits=False, showconjunctions=False, background=True, loadsim=None):
     #frame_ctr , time, filename, time_per_beat, color, showparticles, showtransits, showconjunctions, conjunctions, background, transparent = params
