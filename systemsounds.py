@@ -114,7 +114,7 @@ class FrameRecorder(EventRecorder):
         self.plotparticles = range(1, sim.N) if plotparticles is None else plotparticles
         def root_func(sim, target=None):
             #print(sim.t, sim.t - self._last_frame_time - 1./self.fps)
-            return sim.t - self._last_frame_time - 1./self.fps
+            return sim.t - self._last_frame_time - self.time_per_sec/self.fps
         super(FrameRecorder, self).__init__(sim, root_func, targets=[None]) # no individual targets for timer, so pass iterator with single entry
 
     def process_event(self, frame_sim, target=None):
@@ -164,45 +164,3 @@ def write_png(frame_ctr, time, filename, plotparticles=None, color=False, showtr
 
     fig.savefig('tmp/pngs/{0:0=5d}.png'.format(frame_ctr), transparent=True, dpi=300)
     plt.close(fig)  
-
-class System(rebound.Simulation):
-    def __init__(self, fps=30):
-        super(System, self).__init__()
-        self.initialize(fps=30)
-
-    @classmethod
-    def from_file(cls, filename):
-        sim = rebound.Simulation.from_file(filename)
-        sim.__class__ = cls
-        sim.initialize(fps=30)
-        return sim
-
-    def initialize(self, fps=30):
-        try:
-            call("rm -f ./tmp/*", shell=True)
-        except:
-            pass
-        self.t = 0
-        self.fps = fps
-        self._frame_ctr = 0
-        self._fig_timer = 0.
-        self.time_elapsed = 0
-        
-        self.fig_params = []
-        self.conjunctions = []
-        self.transits = []
-        self.frames = []
-        self.tempo = []
-
-        self.recordtransits = []
-        self.recordconjunctions = []
-        
-        self.time_per_sec = None
-        self.set_heartbeat()
-
-    @property
-    def time_per_sec(self): # time_per_sec is beats per second, so just bpm/60
-        return self._time_per_sec
-    @time_per_sec.setter
-    def time_per_sec(self, value):
-        self._time_per_sec = value
