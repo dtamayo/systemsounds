@@ -1,6 +1,13 @@
 System Sounds - Bringing Planetary Systems to Life
 ==================================================
 
+This code helps you make movies and MIDI files from N-body simulations using REBOUND. 
+
+We have refactored things in a way that makes it more modular and customizable.
+You now have more control over how you make your movies. 
+The idea is to build up a library of examples that people can modify, rather than continually complicate a rigid framework that may not do what you want it to when you have a great idea for something new. 
+Check out what's in jupyter_examples, and if you make something cool, send us a pull request so we can add it into the examples!
+
 Installation
 ------------
 

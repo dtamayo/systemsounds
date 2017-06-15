@@ -29,13 +29,12 @@ def rescale_time(sim, timescale): # Rescale time by timescale, i.e. timescale ti
 
 def prepend_to_heartbeat(sim, func):
     try:    # can't store sim.heartbeat b/c ctypes returns new object each time so we'd always get latest hb
-        oldhb = sim._pyheartbeat                      
+        oldhb = sim._hb
     except AttributeError:
         oldhb = lambda s: None
     def heartbeat(reb_sim):
         oldhb(reb_sim)
         func(reb_sim)
-    sim._pyheartbeat = heartbeat                            # store python function in sim
     sim.heartbeat = heartbeat                               # update ctypes function wrapper in sim
 
 def copysim(sim):                                           # should eventually add better version to REBOUND
@@ -110,8 +109,14 @@ class FrameRecorder(EventRecorder):
         self.fps = fps
         self.time_per_sec = time_per_sec
         self.frame_ctr = 0
+        self.elapsed_time = 0. # movie time in seconds
         self._last_frame_time = sim.t
         self.plotparticles = range(1, sim.N) if plotparticles is None else plotparticles
+
+        def update_elapsed_time(reb_sim):
+            self.elapsed_time += reb_sim.contents.dt_last_done/self.time_per_sec
+        prepend_to_heartbeat(sim, update_elapsed_time)
+
         def root_func(sim, target=None):
             #print(sim.t, sim.t - self._last_frame_time - 1./self.fps)
             return sim.t - self._last_frame_time - self.time_per_sec/self.fps
@@ -123,44 +128,3 @@ class FrameRecorder(EventRecorder):
         self._last_frame_time = frame_sim.t
         super(FrameRecorder, self).process_event(frame_sim, target)
         self.frame_ctr += 1
-           
-def write_png(frame_ctr, time, filename, plotparticles=None, color=False, showtransits=False, showconjunctions=False, background=True, loadsim=None):
-    #frame_ctr , time, filename, time_per_beat, color, showparticles, showtransits, showconjunctions, conjunctions, background, transparent = params
-    sim = loadsim(filename)
-    sim.integrate(time)
-    ps = sim.particles
-
-    coloriterator = [color[i] for i in plotparticles]
-    
-    lw=3
-    fadetimescale = sim.particles[-1].P/3. # for conjunctions
-    refsize=25*lw # this is what REBOUND uses for size of circles in call to plt.scatter
-
-    fig = rebound.OrbitPlot(sim, figsize=(8,8), color=coloriterator, lw=lw, plotparticles=showparticles)
-    ax = fig.axes[0]
-    ax.axis('off')
-        
-    for i in showparticles:
-        ax.scatter(ps[i].x, ps[i].y, s=refsize, color=color[i], marker='o', zorder=4)
-    for i in showtransits:
-        scale=ps[i].a/3 # length scale for making dots bigger
-        size=refsize
-        if ps[i].x > 0 and np.abs(ps[i].y)/scale < 1:
-            size *= 1+6*np.exp(-np.abs(ps[i].y)/scale)
-            ax.scatter(ps[i].x, ps[i].y, s=size, color=color[i], marker='o', zorder=5)
-    
-    xlim = ax.get_xlim()
-    ylim = ax.get_ylim()
-    cscale = 10*xlim[1]
-    if showconjunctions:
-        nearby_conjunctions = [conjunction for conjunction in conjunctions if time - conjunction[0] < fadetimescale]
-        for conjunction in nearby_conjunctions:
-            j, x, y = conjunction[1], conjunction[2], conjunction[3]
-            if j in showconjunctions and j+1 in showconjunctions:
-                ax.plot([0, cscale*x], [0,cscale*y], lw=5, color=color[j], alpha=max(1.-(time-conjunction[0])/fadetimescale,0.), zorder=1)
-       
-    bkg = imread('images/US_background_image.png')
-    ax.imshow(bkg, zorder=0, extent=xlim+ylim)
-
-    fig.savefig('tmp/pngs/{0:0=5d}.png'.format(frame_ctr), transparent=True, dpi=300)
-    plt.close(fig)  
