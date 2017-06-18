@@ -58,8 +58,8 @@ class EventRecorder(object):
             for target in self.targets:
                 val = rootfunc(sim, target)
                 if self._oldvals[target] is not None:           # not first call
-                    if self._oldvals[target] < 0 and val > 0:   # crossed from negative to positive
-                        sim_root_crossing = self.bisection(sim, rootfunc, target)
+                    if self._oldvals[target] < 0 and val >= 0:   # crossed from negative to positive
+                        sim_root_crossing = self.bisection(sim, self._oldvals[target], rootfunc, target)
                         self.process_event(sim_root_crossing, target)
                 self._oldvals[target] = val
         prepend_to_heartbeat(sim, check_for_root_crossings)
@@ -71,23 +71,24 @@ class EventRecorder(object):
                 params[key] = self.__dict__[key]
         self.events.append(params)
 
-    def bisection(self, sim, rootfunc, target, epsilon=1.e-6): # bisection to find crossing time
+    def bisection(self, sim, val, rootfunc, target, epsilon=1.e-6): # bisection to find crossing time
         sim2 = copysim(sim)
         oldt = sim.t # need to go back from overshot t to previous value
         newt = sim.t - sim.dt_last_done
         sim2.dt *= -1
         oldval = rootfunc(sim2, target) 
-        while (abs(newt - oldt)/oldt > epsilon):
-            midt = (newt + oldt)/2.
-            sim2.integrate(midt)
-            val = rootfunc(sim2, target)
-            if oldval*val < 0.: # switched sign
-                newt = oldt # go back to prev value
-                sim2.dt *= -0.3
-            else: # keep integrating toward newt
-                sim2.dt *= 0.3
-            oldt = midt # next iteration starts at midt
-            oldval = val
+        if abs(oldval/val) > epsilon: # check edge case where oldval is at 0 initially (use val for scale)
+            while (abs(newt - oldt)/oldt > epsilon):
+                midt = (newt + oldt)/2.
+                sim2.integrate(midt)
+                val = rootfunc(sim2, target)
+                if oldval*val < 0.: # switched sign
+                    newt = oldt # go back to prev value
+                    sim2.dt *= -0.3
+                else: # keep integrating toward newt
+                    sim2.dt *= 0.3
+                oldt = midt # next iteration starts at midt
+                oldval = val
         return sim2
 
     @property
@@ -106,6 +107,9 @@ class FrameRecorder(EventRecorder):
             call("rm -f ./tmp/*", shell=True)
         except:
             pass
+        if sim.dt > time_per_sec/fps:
+            sim.dt = time_per_sec/fps/np.e # make timestep shorter than time bet. frames
+            sim.ri_ias15.epsilon = 0       # set constant timestep in ias15 so doesn't increase
         self.fps = fps
         self.time_per_sec = time_per_sec
         self.frame_ctr = 0
@@ -118,7 +122,6 @@ class FrameRecorder(EventRecorder):
         prepend_to_heartbeat(sim, update_elapsed_time)
 
         def root_func(sim, target=None):
-            #print(sim.t, sim.t - self._last_frame_time - 1./self.fps)
             return sim.t - self._last_frame_time - self.time_per_sec/self.fps
         super(FrameRecorder, self).__init__(sim, root_func, targets=[None]) # no individual targets for timer, so pass iterator with single entry
 
