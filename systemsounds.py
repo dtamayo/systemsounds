@@ -108,7 +108,7 @@ class FrameRecorder(EventRecorder):
         except:
             pass
         if sim.dt > time_per_sec/fps:
-            sim.dt = time_per_sec/fps/np.e # make timestep shorter than time bet. frames
+            sim.dt = time_per_sec/fps/np.e # make time_per_secmestep shorter than time bet. frames
             sim.ri_ias15.epsilon = 0       # set constant timestep in ias15 so doesn't increase
         self.fps = fps
         self.time_per_sec = time_per_sec
