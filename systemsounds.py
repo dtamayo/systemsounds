@@ -46,22 +46,26 @@ def copysim(sim):                                           # should eventually 
     return sim2
 
 class EventRecorder(object):
-    def __init__(self, sim, rootfunc, targets=None):
+    def __init__(self, sim, rootfunc, targets=None, verbose=False):
         self.events = []
         self._oldvals = {}
         self.targets = range(1, sim.N) if targets is None else targets
         self.add_event_recorder_to_heartbeat(sim, rootfunc)
+        self.verbose = verbose
     def add_event_recorder_to_heartbeat(self, sim, rootfunc):
         def check_for_root_crossings(reb_sim):
             sim = reb_sim.contents
             ps = sim.particles
             for target in self.targets:
                 val = rootfunc(sim, target)
-                if self._oldvals[target] is not None:           # not first call
-                    if self._oldvals[target] < 0 and val >= 0:   # crossed from negative to positive
-                        sim_root_crossing = self.bisection(sim, self._oldvals[target], rootfunc, target)
-                        self.process_event(sim_root_crossing, target)
-                self._oldvals[target] = val
+                if self._oldvals[target] is not None and self._oldvals[target] < 0 and val >= 0:   # not first call, and crossed from negative to positive
+                    sim_root_crossing = self.bisection(sim, self._oldvals[target], rootfunc, target)
+                    self.process_event(sim_root_crossing, target)
+                    self._oldvals[target] = -1. # set oldval to negative number so we get a root crossing if another event happens within next timestep
+                    if self.verbose:
+                        print("{0} event at t = {1}".format(self.__class__.__name__, sim_root_crossing.t))
+                else:
+                    self._oldvals[target] = val
         prepend_to_heartbeat(sim, check_for_root_crossings)
 
     def process_event(self, sim, target):
@@ -102,14 +106,11 @@ class EventRecorder(object):
                 self._oldvals[target] = None
 
 class FrameRecorder(EventRecorder):
-    def __init__(self, sim, time_per_sec, fps=30, plotparticles=None):
+    def __init__(self, sim, time_per_sec, fps=30, plotparticles=None, verbose=False):
         try:
             call("rm -f ./tmp/*", shell=True)
         except:
             pass
-        if sim.dt > time_per_sec/fps:
-            sim.dt = time_per_sec/fps/np.e # make timestep shorter than time bet. frames
-            sim.ri_ias15.epsilon = 0       # set constant timestep in ias15 so doesn't increase
         self.fps = fps
         self.time_per_sec = time_per_sec
         self.frame_ctr = 0
@@ -118,12 +119,16 @@ class FrameRecorder(EventRecorder):
         self.plotparticles = range(1, sim.N) if plotparticles is None else plotparticles
 
         def update_elapsed_time(reb_sim):
-            self.elapsed_time += reb_sim.contents.dt_last_done/self.time_per_sec
+            sim = reb_sim.contents
+            self.elapsed_time += sim.dt_last_done/self.time_per_sec
+            if sim.dt > self.time_per_sec/self.fps: # check timestep is not longer than time between frames
+                sim.dt = self.time_per_sec/self.fps/np.sqrt(2.) # make timestep shorter than time between frames (random irrational close to 1)
+                sim.ri_ias15.epsilon = 0       # set constant timestep in ias15 so doesn't increase
         prepend_to_heartbeat(sim, update_elapsed_time)
 
         def root_func(sim, target=None):
             return sim.t - self._last_frame_time - self.time_per_sec/self.fps
-        super(FrameRecorder, self).__init__(sim, root_func, targets=[None]) # no individual targets for timer, so pass iterator with single entry
+        super(FrameRecorder, self).__init__(sim, root_func, targets=[None], verbose=verbose) # no individual targets for timer, so pass iterator with single entry
 
     def process_event(self, frame_sim, target=None):
         self.filename = "tmp/binaries/frame"+str(self.frame_ctr)+".bin"
