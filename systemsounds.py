@@ -64,8 +64,7 @@ class EventRecorder(object):
                     self._oldvals[target] = -1. # set oldval to negative number so we get a root crossing if another event happens within next timestep
                     if self.verbose:
                         print("{0} event at t = {1}".format(self.__class__.__name__, sim_root_crossing.t))
-                else:
-                    self._oldvals[target] = val
+                self._oldvals[target] = rootfunc(sim, target)
         prepend_to_heartbeat(sim, check_for_root_crossings)
 
     def process_event(self, sim, target):
