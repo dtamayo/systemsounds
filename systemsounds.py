@@ -58,13 +58,15 @@ class EventRecorder(object):
             ps = sim.particles
             for target in self.targets:
                 val = rootfunc(sim, target)
+                #print(sim.t, self._oldvals[None], val, type(target))
                 if self._oldvals[target] is not None and self._oldvals[target] < 0 and val >= 0:   # not first call, and crossed from negative to positive
                     sim_root_crossing = self.bisection(sim, self._oldvals[target], rootfunc, target)
                     self.process_event(sim_root_crossing, target)
                     self._oldvals[target] = -1. # set oldval to negative number so we get a root crossing if another event happens within next timestep
                     if self.verbose:
                         print("{0} event at t = {1}".format(self.__class__.__name__, sim_root_crossing.t))
-                self._oldvals[target] = rootfunc(sim, target)
+                else:
+                    self._oldvals[target] = rootfunc(sim, target)
         prepend_to_heartbeat(sim, check_for_root_crossings)
 
     def process_event(self, sim, target):
